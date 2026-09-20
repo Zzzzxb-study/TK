@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block mainclass %}login-layout{% endblock %}{% block content %}
+<section class="login-intro"><div class="eyebrow">INSURANCE DOCUMENT LIBRARY</div><h1>条款有序归档，<br>业务随时查阅。</h1><p>集中管理保险条款、附加险及费率资料，<br>让每一份文件，都有清晰的归属。</p><div class="intro-line"></div><div class="intro-features"><span>分类检索</span><span>按需授权</span><span>操作留痕</span></div><div class="intro-number">01 <span>/ 条款资料中心</span></div></section>
+<section class="login-card"><span class="brand-icon">保</span><h2>登录条款库</h2><p class="muted">请使用管理员分配的工号和密码。</p><form method="post">{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}<button class="button full" type="submit">登录账户 <span>→</span></button></form><div class="login-note">尚无工号或忘记密码？请联系管理员。<br>本系统不开放自行注册。</div></section>
+{% endblock %}

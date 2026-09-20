@@ -1,0 +1,55 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      DATA_DIR: /data
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY}
+      ALLOWED_HOSTS: ${DOMAIN:?Set DOMAIN}
+      CSRF_TRUSTED_ORIGINS: https://${DOMAIN}
+      DB_HOST: db
+      DB_NAME: clauses
+      DB_USER: clauses
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+    volumes:
+      - documents:/data
+      - staticfiles:/app/staticfiles
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clauses
+      POSTGRES_USER: clauses
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clauses -d clauses"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  web:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - staticfiles:/srv/static:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+volumes:
+  documents:
+  staticfiles:
+  database:
+  caddy_data:
+  caddy_config:

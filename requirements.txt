@@ -1,0 +1,4 @@
+Django>=5.2.12,<5.3
+psycopg[binary]>=3.2,<4
+waitress>=3.0,<4
+olefile>=0.47,<1
