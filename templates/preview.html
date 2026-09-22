@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block content %}
+<a class="back" href="{% url 'detail' doc.pk %}">← 返回资料详情</a>
+<div class="heading"><div><div class="eyebrow">DOCUMENT PREVIEW</div><h1>{{ doc.title }}</h1><p class="muted">{{ doc.original_name }} · {{ doc.get_kind_display }}</p></div><a class="button secondary" href="{% url 'download' doc.pk %}">下载原文件</a></div>
+<section class="panel preview-panel">
+{% if doc.extension == '.pdf' %}
+  <p class="muted">PDF 预览</p>
+  <iframe class="pdf-preview" src="{% url 'preview' doc.pk %}" title="{{ doc.title }}"></iframe>
+{% elif doc.extension == '.docx' %}
+  <p class="muted">DOCX 正文预览（表格已转换为网页表格，原版式请下载原文件查看）。</p>
+  <article class="docx-preview">{{ preview_html|safe }}</article>
+{% else %}
+  <div class="notice"><strong>旧版 DOC 暂不支持网页正文预览。</strong><p>请下载原文件后使用 Word 或 WPS 查看。</p></div>
+{% endif %}
+</section>
+{% endblock %}

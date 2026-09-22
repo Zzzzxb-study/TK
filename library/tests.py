@@ -49,6 +49,21 @@ class LibraryTests(TestCase):
         for method, url in [('get', '/upload/'), ('get', f'/documents/{self.doc.pk}/download/'), ('post', f'/documents/{self.doc.pk}/delete/'), ('get', '/users/'), ('get', '/audit/'), ('get', '/trash/'), ('post', '/users/new/')]:
             self.assertEqual(getattr(self.client, method)(url).status_code, 403, url)
 
+    def test_batch_upload_and_pdf_preview(self):
+        self.grant('download_document', 'upload_document')
+        response = self.client.post('/upload/', {
+            'title': '', 'category': self.category.pk, 'product': self.doc.product_id,
+            'coverage': 'main', 'kind': 'clause', 'file': [pdf('第一份.pdf'), pdf('第二份.pdf')],
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Document.objects.count(), 3)
+        self.assertEqual(set(Document.objects.exclude(pk=self.doc.pk).values_list('title', flat=True)), {'第一份', '第二份'})
+        preview = self.client.get(f'/documents/{self.doc.pk}/preview/')
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview['Content-Type'], 'application/pdf')
+        b''.join(preview.streaming_content)
+        preview.close()
+        self.assertTrue(preview['Content-Disposition'].startswith('inline;'))
     def test_download_only_and_content_hash(self):
         self.grant('download_document')
         response = self.client.get(f'/documents/{self.doc.pk}/download/')

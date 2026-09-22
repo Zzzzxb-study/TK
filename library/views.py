@@ -1,8 +1,10 @@
 import hashlib
 import json
+import zipfile
 from datetime import timedelta
 from functools import wraps
 from pathlib import Path
+from urllib.parse import quote
 from django.contrib import messages
 from django.contrib.auth import login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required, permission_required
@@ -20,8 +22,9 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from .forms import LoginForm, UploadForm, UserCreateForm, UserEditForm
 from .models import Audit, Blob, Category, Document, LoginThrottle, Product, User
-from .storage import blob_path, save_blob
+from .storage import blob_path, save_blob, validate_document
 from .catalog import active_category_ids, visible_documents
+from .preview import docx_to_html
 
 
 def admin_required(view):
@@ -177,6 +180,28 @@ def library(request):
 def detail(request, pk):
     doc = get_object_or_404(visible_documents(request.user, Document.objects.select_related('category', 'product', 'blob', 'uploaded_by')), pk=pk, deleted_at__isnull=True)
     return render(request, 'detail.html', {'doc': doc})
+@login_required
+@permission_required('library.download_document', raise_exception=True)
+@never_cache
+def preview(request, pk):
+    doc = get_object_or_404(visible_documents(request.user, Document.objects.select_related('category', 'product', 'blob')), pk=pk, deleted_at__isnull=True)
+    try:
+        path = blob_path(doc.blob)
+        if doc.extension == '.pdf':
+            stream = path.open('rb')
+            audit(request.user, '预览资料', doc.title, f'document_id={doc.pk}; PDF 内嵌预览')
+            response = FileResponse(stream, content_type='application/pdf')
+            response['Content-Disposition'] = "inline; filename*=UTF-8''" + quote(doc.original_name, safe='')
+            response['X-Content-Type-Options'] = 'nosniff'
+            return response
+        if doc.extension == '.docx':
+            preview_html = docx_to_html(path)
+        else:
+            preview_html = ''
+    except (FileNotFoundError, OSError, ValueError, KeyError, zipfile.BadZipFile):
+        raise Http404('文件缺失或无法解析，请联系管理员')
+    audit(request.user, '预览资料', doc.title, f'document_id={doc.pk}; DOCX 正文预览' if doc.extension == '.docx' else f'document_id={doc.pk}; 格式暂不支持正文预览')
+    return render(request, 'preview.html', {'doc': doc, 'preview_html': preview_html})
 
 
 @login_required
@@ -185,29 +210,39 @@ def upload(request):
     initial = {key: request.GET.get(key) for key in ('category', 'product', 'coverage') if request.GET.get(key)}
     form = UploadForm(request.POST or None, request.FILES or None, initial=initial)
     if request.method == 'POST' and form.is_valid():
+        files = form.cleaned_data['file']
+        if not isinstance(files, (list, tuple)):
+            files = [files]
         try:
-            blob = save_blob(form.cleaned_data['file'])
+            for uploaded in files:
+                validate_document(uploaded)
+            category = form.cleaned_data['category']
             with transaction.atomic():
                 list(Category.objects.select_for_update().values_list('pk', flat=True))
-                if form.cleaned_data['category'].pk not in active_category_ids():
+                if category.pk not in active_category_ids():
                     raise ValidationError('产品类别已停用，不能上传。')
-                doc = form.save(commit=False)
-                doc.blob = blob
-                doc.uploaded_by = request.user
-                doc.original_name = Path(form.cleaned_data['file'].name).name
-                doc.extension = Path(doc.original_name).suffix.lower()
-                if form.cleaned_data['product_name']:
-                    raw = json.dumps([doc.category_id, form.cleaned_data['product_name'], form.cleaned_data['product_code'], doc.version], ensure_ascii=False)
-                    doc.product, _ = Product.objects.get_or_create(source_key=hashlib.sha256(raw.encode()).hexdigest(), defaults={
-                        'category': doc.category, 'name': form.cleaned_data['product_name'], 'code': form.cleaned_data['product_code'], 'version': doc.version})
-                doc.save()
-                audit(request.user, '上传资料', doc.title, f'document_id={doc.pk}')
-            messages.success(request, '资料已上传并保存在服务器。')
-            return redirect('detail', pk=doc.pk)
+                product = form.cleaned_data['product']
+                if not product and form.cleaned_data['product_name']:
+                    raw = json.dumps([category.pk, form.cleaned_data['product_name'], form.cleaned_data['product_code'], form.cleaned_data['version']], ensure_ascii=False)
+                    product, _ = Product.objects.get_or_create(source_key=hashlib.sha256(raw.encode()).hexdigest(), defaults={
+                        'category': category, 'name': form.cleaned_data['product_name'], 'code': form.cleaned_data['product_code'], 'version': form.cleaned_data['version']})
+                created = []
+                for uploaded in files:
+                    blob = save_blob(uploaded)
+                    original_name = Path(uploaded.name).name
+                    title = form.cleaned_data.get('title') or Path(original_name).stem
+                    doc = Document.objects.create(title=title, category=category, product=product,
+                        coverage=form.cleaned_data['coverage'], kind=form.cleaned_data['kind'], version=form.cleaned_data['version'],
+                        blob=blob, original_name=original_name, extension=Path(original_name).suffix.lower(), uploaded_by=request.user)
+                    created.append(doc)
+                audit(request.user, '批量上传资料' if len(created) > 1 else '上传资料',
+                      f'{len(created)} 份资料', 'document_ids=' + ','.join(str(doc.pk) for doc in created))
+            messages.success(request, f'已上传 {len(created)} 份资料并保存在服务器。')
+            return redirect('library')
         except ValidationError as exc:
             form.add_error('file', exc)
-    return render(request, 'form.html', {'form': form, 'title': '上传资料', 'subtitle': '支持 DOC、DOCX、PDF，单个文件最大 20 MB。', 'submit': '上传并保存'})
-
+    return render(request, 'form.html', {'form': form, 'title': '上传资料',
+        'subtitle': '支持 DOC、DOCX、PDF；可一次选择多个文件，每个文件最大 20 MB。批量上传时资料名称按文件名生成。', 'submit': '上传并保存'})
 
 @login_required
 @permission_required('library.download_document', raise_exception=True)

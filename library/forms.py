@@ -10,6 +10,22 @@ from .storage import validate_document
 PERMISSIONS = [('upload_document', '上传资料'), ('download_document', '下载资料'), ('remove_document', '删除资料')]
 
 
+class MultipleFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
+
+
+class MultipleFileField(forms.FileField):
+    """Return every selected file while keeping Django's required checks."""
+
+    widget = MultipleFileInput
+
+    def clean(self, data, initial=None):
+        if not data:
+            return super().clean(data, initial)
+        files = data if isinstance(data, (list, tuple)) else [data]
+        return [forms.FileField.clean(self, item, initial) for item in files]
+
+
 class LoginForm(AuthenticationForm):
     username = forms.CharField(label='工号 / 管理员账号', max_length=150)
     password = forms.CharField(label='密码', widget=forms.PasswordInput)
@@ -20,8 +36,9 @@ class UploadForm(forms.ModelForm):
     product = forms.ModelChoiceField(label='选择已有产品', queryset=Product.objects.none(), required=False, empty_label='请选择；新产品请填写下方名称')
     product_name = forms.CharField(label='新产品名称', max_length=300, required=False, help_text='仅新增产品时填写；与“已有产品”二选一。')
     product_code = forms.CharField(label='新产品代码', max_length=80, required=False)
-    file = forms.FileField(label='Word / PDF 文件', validators=[validate_document],
-                           widget=forms.ClearableFileInput(attrs={'accept': '.doc,.docx,.pdf'}))
+    file = MultipleFileField(label='Word / PDF 文件（可多选）',
+                             widget=MultipleFileInput(attrs={'accept': '.doc,.docx,.pdf', 'multiple': True}),
+                             help_text='可一次选择多个文件；批量上传时资料名称按文件名自动生成。')
 
     class Meta:
         model = Document
@@ -30,6 +47,8 @@ class UploadForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields['title'].required = False
+        self.fields['title'].help_text = '单个文件可填写；多文件上传时留空将按文件名生成。'
         ids = active_category_ids()
         self.fields['category'].queryset = Category.objects.filter(pk__in=ids)
         self.fields['product'].queryset = Product.objects.filter(category_id__in=ids).select_related('category').order_by('category__full_path', 'name')
@@ -37,6 +56,8 @@ class UploadForm(forms.ModelForm):
 
     def clean(self):
         data = super().clean()
+        if data.get('title'):
+            data['title'] = data['title'].strip()
         product, name = data.get('product'), data.get('product_name')
         if not product and not name:
             self.add_error('product_name', '请选择已有产品，或填写新产品名称。')
@@ -45,7 +66,6 @@ class UploadForm(forms.ModelForm):
         if product and data.get('category') and product.category_id != data['category'].pk:
             self.add_error('product', '所选产品不属于该产品类别。')
         return data
-
 
 class UserCreateForm(forms.Form):
     username = forms.CharField(label='工号', max_length=150, validators=[RegexValidator(r'^[A-Za-z0-9_-]+$', '工号仅支持字母、数字、下划线和连字符。')])
